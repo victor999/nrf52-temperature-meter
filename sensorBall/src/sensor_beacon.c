@@ -164,7 +164,7 @@ static const hal_serial_cfg_t serial_cfg =
 #define INTERVAL_US                                 (8000000)           /* The time in microseconds between advertising events. */
 #define INITIAL_TIMEOUT                             (INTERVAL_US)       /* The time in microseconds until adverising the first time. */
 #define START_OF_INTERVAL_TO_SENSOR_READ_TIME_US    (INTERVAL_US / 2)   /* The time from the start of the latest advertising event until reading the sensor. */
-#define SENSOR_SKIP_READ_COUNT                      (10)                /* The number of advertising events between reading the sensor. */
+#define SENSOR_SKIP_READ_COUNT                      (5)                /* The number of advertising events between reading the sensor. */
 
 #define POWERUP_DELAY_US														(300000)							/*delay after powerup the sensor*/
 
@@ -482,14 +482,14 @@ void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
             nrf_drv_saadc_abort();                                                                      // Abort all ongoing conversions. Calibration cannot be run if SAADC is busy
             m_saadc_calibrate = true;                                                                   // Set flag to trigger calibration in main context when SAADC is stopped
         }  
-				
-				float measured_voltage = (float)(p_event->data.done.p_buffer[0]) * 0.6 * 6.0 / 4096.0; 
-				
-				g_batteryVoltage_mv = measured_voltage * 1000 * 2; //ADC_RESULT_IN_MILLI_VOLTS(p_event->data.done.p_buffer[0]);
         
         if(m_saadc_calibrate == false)
         {
-            err_code = nrf_drv_saadc_buffer_convert(p_event->data.done.p_buffer, SAADC_SAMPLES_IN_BUFFER);             //Set buffer so the SAADC can write to it again. 
+						float measured_voltage = (float)(p_event->data.done.p_buffer[0]) * 0.6 * 6.0 / 16384.0; 
+				
+						g_batteryVoltage_mv = measured_voltage * 1000; //ADC_RESULT_IN_MILLI_VOLTS(p_event->data.done.p_buffer[0]);
+					
+            err_code = nrf_drv_saadc_buffer_convert(p_event->data.done.p_buffer, SAADC_SAMPLES_IN_BUFFER);             //Set buffer so the SAADC can write to it again. 						
         }
         
         m_adc_evt_counter++;
@@ -524,7 +524,7 @@ void saadc_init(void)
 	
     //Configure SAADC
     saadc_config.low_power_mode = true;                                                   //Enable low power mode.
-    saadc_config.resolution = NRF_SAADC_RESOLUTION_12BIT;                                 //Set SAADC resolution to 12-bit. This will make the SAADC output values from 0 (when input voltage is 0V) to 2^12=2048 (when input voltage is 3.6V for channel gain setting of 1/6).
+    saadc_config.resolution = NRF_SAADC_RESOLUTION_14BIT;                                 //Set SAADC resolution to 12-bit. This will make the SAADC output values from 0 (when input voltage is 0V) to 2^14=16384 (when input voltage is 3.6V for channel gain setting of 1/6).
     saadc_config.oversample = SAADC_OVERSAMPLE;                                           //Set oversample to 4x. This will make the SAADC output a single averaged value when the SAMPLE task is triggered 4 times.
     saadc_config.interrupt_priority = APP_IRQ_PRIORITY_LOW;                               //Set SAADC interrupt to low priority.
 	
@@ -534,11 +534,13 @@ void saadc_init(void)
     //Configure SAADC channel
     channel_config.reference = NRF_SAADC_REFERENCE_INTERNAL;                              //Set internal reference of fixed 0.6 volts
     channel_config.gain = NRF_SAADC_GAIN1_6;                                              //Set input gain to 1/6. The maximum SAADC input voltage is then 0.6V/(1/6)=3.6V. The single ended input range is then 0V-3.6V
-    channel_config.acq_time = NRF_SAADC_ACQTIME_10US;                                     //Set acquisition time. Set low acquisition time to enable maximum sampling frequency of 200kHz. Set high acquisition time to allow maximum source resistance up to 800 kohm, see the SAADC electrical specification in the PS. 
+    channel_config.acq_time = NRF_SAADC_ACQTIME_40US;                                     //Set acquisition time. Set low acquisition time to enable maximum sampling frequency of 200kHz. Set high acquisition time to allow maximum source resistance up to 800 kohm, see the SAADC electrical specification in the PS. 
     channel_config.mode = NRF_SAADC_MODE_SINGLE_ENDED;                                    //Set SAADC as single ended. This means it will only have the positive pin as input, and the negative pin is shorted to ground (0V) internally.
-    channel_config.pin_p = NRF_SAADC_INPUT_AIN0;                                          //Select the input pin for the channel. AIN0 pin maps to physical pin P0.02.
+//		channel_config.pin_p = NRF_SAADC_INPUT_AIN0;                                          //Select the input pin for the channel. AIN0 pin maps to physical pin P0.02.
+		channel_config.pin_p = NRF_SAADC_INPUT_VDD;                                          //Select the input pin for the channel. AIN0 pin maps to physical pin P0.02.
     channel_config.pin_n = NRF_SAADC_INPUT_DISABLED;                                      //Since the SAADC is single ended, the negative pin is disabled. The negative pin is shorted to ground internally.
-    channel_config.resistor_p = NRF_SAADC_RESISTOR_DISABLED;                              //Disable pullup resistor on the input pin
+//    channel_config.resistor_p = NRF_SAADC_RESISTOR_PULLUP;                              	//Enable pullup resistor on the input pin
+		channel_config.resistor_p = NRF_SAADC_RESISTOR_DISABLED;                              	//Enable pullup resistor on the input pin
     channel_config.resistor_n = NRF_SAADC_RESISTOR_DISABLED;                              //Disable pulldown resistor on the input pin
 
 	
@@ -569,11 +571,7 @@ static void beacon_handler(void)
     do
     {
         if ( m_skip_read_counter == 0 )
-        {
-						nrf_drv_saadc_sample();                                        //Trigger the SAADC SAMPLE task
-				
-						calibration_handler();
-					
+        {				
             m_rtc_isr_called = false;
             hal_timer_timeout_set(m_time_us - START_OF_INTERVAL_TO_SENSOR_READ_TIME_US);
 						wait_for_timer();
@@ -585,14 +583,23 @@ static void beacon_handler(void)
             
             sensor_handler(m_time_us - START_OF_INTERVAL_TO_SENSOR_READ_TIME_US + POWERUP_DELAY_US + 40000, 10000);
 					
-						
+						m_rtc_isr_called = false;
+            hal_timer_timeout_set(m_time_us - START_OF_INTERVAL_TO_SENSOR_READ_TIME_US + POWERUP_DELAY_US + 500000);
+            wait_for_timer();
+					
+						nrf_drv_saadc_sample();                                        //Trigger the SAADC SAMPLE task
+						calibration_handler();
 			
         }
         m_skip_read_counter = ( (m_skip_read_counter + 1) < SENSOR_SKIP_READ_COUNT ) ? (m_skip_read_counter + 1) : 0;
-        
+
+/*
         m_rtc_isr_called = false;
         hal_timer_timeout_set(m_time_us);
         wait_for_timer();
+*/
+				
+				
 				
         hal_clock_hfclk_enable();
         DBG_HFCLK_ENABLED;
