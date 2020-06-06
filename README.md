@@ -1,4 +1,4 @@
-# nrf-temperature-meter
+# nrf52-temperature-meter
 
 Firmware for NRF52 based temperature meter, based on Nordic example.
 
